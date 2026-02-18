@@ -1,32 +1,168 @@
-Run cd "${TURBOWARP_DIR}"
-  cd "${TURBOWARP_DIR}"
-  node convert-sb3.js
-  shell: /usr/bin/bash -e {0}
-  env:
-    TURBOWARP_DIR: Turbowarp-packager
-    PROJECT_DIR: /home/runner/work/Turbowarp_compiler/Turbowarp_compiler/project
-    OUTPUT_HTML_DIR: /home/runner/work/Turbowarp_compiler/Turbowarp_compiler/output-html
-    CORDOVA_DIR: /home/runner/work/Turbowarp_compiler/Turbowarp_compiler/cordova-project
-node:internal/modules/cjs/loader:1210
-  throw err;
-  ^
-Error: Cannot find module './dist-node/index.js'
-Require stack:
-- /home/runner/work/Turbowarp_compiler/Turbowarp_compiler/Turbowarp-packager/convert-sb3.js
-    at Module._resolveFilename (node:internal/modules/cjs/loader:1207:15)
-    at Module._load (node:internal/modules/cjs/loader:1038:27)
-    at Module.require (node:internal/modules/cjs/loader:1289:19)
-    at require (node:internal/modules/helpers:182:18)
-    at Object.<anonymous> (/home/runner/work/Turbowarp_compiler/Turbowarp_compiler/Turbowarp-packager/convert-sb3.js:3:18)
-    at Module._compile (node:internal/modules/cjs/loader:1521:14)
-    at Module._extensions..js (node:internal/modules/cjs/loader:1623:10)
-    at Module.load (node:internal/modules/cjs/loader:1266:32)
-    at Module._load (node:internal/modules/cjs/loader:1091:12)
-    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:164:12) {
-  code: 'MODULE_NOT_FOUND',
-  requireStack: [
-    '/home/runner/work/Turbowarp_compiler/Turbowarp_compiler/Turbowarp-packager/convert-sb3.js'
-  ]
-}
-Node.js v20.20.0
-Error: Process completed with exit code 1.
+name: SB3 转 APK 自动构建
+on:
+  workflow_dispatch:
+    inputs:
+      package_name:
+        description: 'APK 包名（符合 Android 规范，例如：com.example.myapp）'
+        required: true
+        type: string
+      app_name:
+        description: '应用显示名称（例如：我的Scratch应用）'
+        required: true
+        type: string
+      sb3_filename:
+        description: 'project 文件夹下的 .sb3 文件名（例如：demo.sb3）'
+        required: true
+        type: string
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      TURBOWARP_DIR: Turbowarp-packager
+      PROJECT_DIR: ${{ github.workspace }}/project
+      OUTPUT_HTML_DIR: ${{ github.workspace }}/output-html
+      CORDOVA_DIR: ${{ github.workspace }}/cordova-project
+
+    steps:
+      - name: 检出仓库代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 验证 SB3 文件
+        run: |
+          SB3_PATH="${PROJECT_DIR}/${{ inputs.sb3_filename }}"
+          if [ ! -f "$SB3_PATH" ]; then
+            echo "错误：未找到 SB3 文件 - $SB3_PATH"
+            ls -la "$PROJECT_DIR"
+            exit 1
+          fi
+          echo "✅ 找到 SB3 文件：$SB3_PATH"
+
+      - name: 克隆 TurboWarp Packager
+        run: |
+          if [ ! -d "${TURBOWARP_DIR}" ]; then
+            git clone https://github.com/TurboWarp/packager.git "${TURBOWARP_DIR}"
+          fi
+          ls -la "${TURBOWARP_DIR}"
+
+      - name: 设置 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: ${{ env.TURBOWARP_DIR }}/package-lock.json
+
+      - name: 构建 Turbowarp 模块（修复：适配官方构建命令）
+        run: |
+          cd "${TURBOWARP_DIR}"
+          npm ci
+          npm run build-prod  # 关键修复：官方最新版用 build-prod 替代 build-node-prod
+          # 验证构建产物路径
+          ls -la dist/ && ls -la dist/packager/
+
+      - name: 生成转换脚本（修复：修正模块引入路径）
+        run: |
+          cat > "${TURBOWARP_DIR}/convert-sb3.js" << 'EOF'
+          const fs = require('fs');
+          const path = require('path');
+          // 关键修复：修正 Node.js 模块引入路径（官方产物在 dist/packager）
+          const Packager = require('./dist/packager');
+
+          // 环境变量传入的参数
+          const sb3Path = process.env.SB3_PATH;
+          const outputHtmlPath = process.env.OUTPUT_HTML_PATH;
+
+          // 核心转换逻辑
+          const run = async () => {
+            // 创建输出目录
+            fs.mkdirSync(path.dirname(outputHtmlPath), { recursive: true });
+            
+            // 读取 SB3 文件
+            console.log(`📥 读取 SB3 文件: ${sb3Path}`);
+            const projectData = fs.readFileSync(sb3Path);
+
+            // 加载 Scratch 项目（适配官方 API）
+            console.log('🔧 加载项目...');
+            const loadedProject = await Packager.loadProject(projectData);
+
+            // 初始化 Turbowarp 打包器
+            const packager = new Packager.Packager();
+            packager.project = loadedProject;
+            packager.options.target = 'html'; // 指定输出为 HTML
+            packager.options.turbo = true;    // 启用 Turbo 模式优化
+
+            // 执行打包
+            console.log('⚙️ 转换 SB3 到 HTML...');
+            const result = await packager.package();
+
+            // 处理输出数据（兼容 ArrayBuffer/字符串）
+            let htmlData = result.data;
+            if (htmlData instanceof ArrayBuffer) {
+              htmlData = Buffer.from(htmlData).toString('utf8');
+            }
+
+            // 写入 HTML 文件
+            fs.writeFileSync(outputHtmlPath, htmlData);
+            console.log(`✅ HTML 生成完成: ${outputHtmlPath}`);
+          };
+
+          // 执行并捕获错误
+          run().catch((err) => {
+            console.error('❌ 转换失败:', err);
+            process.exit(1);
+          });
+          EOF
+        env:
+          SB3_PATH: ${{ env.PROJECT_DIR }}/${{ inputs.sb3_filename }}
+          OUTPUT_HTML_PATH: ${{ env.OUTPUT_HTML_DIR }}/index.html
+
+      - name: 转换 SB3 到 HTML
+        run: |
+          cd "${TURBOWARP_DIR}"
+          node convert-sb3.js
+
+      - name: 安装 Android & Cordova 依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            openjdk-17-jdk \
+            android-sdk \
+            gradle \
+            unzip \
+            wget
+
+          npm install -g cordova@12.0.0
+
+          echo "ANDROID_HOME=/usr/lib/android-sdk" >> $GITHUB_ENV
+          echo "PATH=\$PATH:/usr/lib/android-sdk/cmdline-tools/latest/bin" >> $GITHUB_ENV
+
+          yes | sdkmanager --licenses || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+
+      - name: 用 Cordova 打包 HTML 为 APK
+        run: |
+          mkdir -p "${CORDOVA_DIR}"
+          cd "${CORDOVA_DIR}"
+
+          cordova create app ${{ inputs.package_name }} "${{ inputs.app_name }}"
+          cd app
+
+          cordova platform add android@12.0.0
+
+          rm -rf www/*
+          cp -r "${OUTPUT_HTML_DIR}"/* www/
+
+          cordova build android --debug
+
+          APK_PATH=$(find platforms/android/app/build/outputs/apk/debug -name "*.apk" | head -1)
+          cp "$APK_PATH" "${CORDOVA_DIR}/${{ inputs.app_name }}_debug.apk"
+          echo "✅ APK 生成完成: ${CORDOVA_DIR}/${{ inputs.app_name }}_debug.apk"
+
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app_name }}-apk-${{ github.run_id }}
+          path: ${{ env.CORDOVA_DIR }}/${{ inputs.app_name }}_debug.apk
+          retention-days: 30
