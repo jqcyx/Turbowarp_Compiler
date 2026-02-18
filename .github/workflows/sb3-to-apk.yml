@@ -40,16 +40,40 @@ jobs:
           fi
           echo "✅ 找到 SB3 文件：$SB3_PATH"
 
-      - name: 克隆 TurboWarp Packager
+      - name: 克隆 TurboWarp Packager（增强容错版）
         run: |
-          if [ ! -d "${TURBOWARP_DIR}" ]; then
-            git clone https://github.com/TurboWarp/packager.git "${TURBOWARP_DIR}"
-          fi
-          # 确保仓库是最新版本
-          cd "${TURBOWARP_DIR}"
-          git checkout main && git pull
-          ls -la "${TURBOWARP_DIR}"
+          # 定义克隆函数，支持重试
+          clone_with_retry() {
+            local max_retries=3
+            local retry_count=0
+            while [ $retry_count -lt $max_retries ]; do
+              echo "🔄 尝试克隆（第 $((retry_count+1)) 次）..."
+              rm -rf "${TURBOWARP_DIR}" || true
+              git clone https://github.com/TurboWarp/packager.git "${TURBOWARP_DIR}" && return 0
+              retry_count=$((retry_count+1))
+              sleep 5
+            done
+            echo "❌ 克隆失败，已重试 $max_retries 次"
+            exit 1
+          }
 
+          # 执行克隆
+          clone_with_retry
+
+          # 进入目录，自动检测并切换默认分支
+          cd "${TURBOWARP_DIR}"
+          # 获取仓库默认分支（避免硬编码）
+          DEFAULT_BRANCH=$(git remote show origin | grep "HEAD branch" | awk '{print $NF}')
+          echo "📌 仓库默认分支：$DEFAULT_BRANCH"
+          git checkout "$DEFAULT_BRANCH" && git pull
+
+          # 最终验证
+          if [ ! -f "package.json" ]; then
+            echo "❌ 克隆后的目录不完整，缺少 package.json"
+            ls -la
+            exit 1
+          fi
+          echo "✅ TurboWarp Packager 克隆并初始化完成"
       - name: 设置 Node.js
         uses: actions/setup-node@v4
         with:
