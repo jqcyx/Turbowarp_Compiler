@@ -1,0 +1,87 @@
+name: Build SB3 to EXE, HTML, APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      sb3_file:
+        description: 'Name of the .sb3 file in the repository'
+        required: true
+        type: string
+      output_name:
+        description: 'Name of the output files (without extension)'
+        required: true
+        type: string
+      apk_package_name:
+        description: 'Package name for the APK (e.g., com.example.game)'
+        required: true
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install turbowarp-packager-cli
+        run: npm install -g turbowarp-packager-cli
+
+      - name: Build HTML with Turbowarp
+        run: |
+          cat > settings-html.json << 'EOF'
+          {
+            "output": {
+              "format": "html"
+            }
+          }
+          EOF
+          npx turbowarp-packager-cli -i ${{ inputs.sb3_file }} -o html_output -s settings-html.json
+          mv html_output/*.html ${{ inputs.output_name }}.html
+
+      - name: Build EXE with Turbowarp
+        run: |
+          cat > settings-exe.json << 'EOF'
+          {
+            "output": {
+              "format": "exe",
+              "platform": "windows"
+            }
+          }
+          EOF
+          npx turbowarp-packager-cli -i ${{ inputs.sb3_file }} -o exe_output -s settings-exe.json
+          mv exe_output/*.exe ${{ inputs.output_name }}.exe
+
+      - name: Setup Capacitor for APK
+        run: |
+          npm init -y
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npx cap init ${{ inputs.output_name }} ${{ inputs.apk_package_name }} --web-dir=.
+          npx cap add android
+          mkdir -p www
+          cp ${{ inputs.output_name }}.html www/index.html
+          npx cap sync
+
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          mv app/build/outputs/apk/debug/app-debug.apk ../${{ inputs.output_name }}.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ inputs.output_name }}.exe
+            ${{ inputs.output_name }}.apk
+            ${{ inputs.output_name }}.html
+          tag_name: v${{ github.run_number }}
+          name: Release v${{ github.run_number }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
