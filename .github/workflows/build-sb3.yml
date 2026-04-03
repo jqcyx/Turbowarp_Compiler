@@ -82,7 +82,7 @@ jobs:
       - name: Set up Java
         uses: actions/setup-java@v3
         with:
-          distribution: 'zulu'
+          distribution: 'temurin'
           java-version: '17'
 
       - name: Setup Android SDK
@@ -105,7 +105,7 @@ jobs:
           npx cap sync android
           
           cd android
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon --stacktrace
           cp app/build/outputs/apk/debug/app-debug.apk ../../${{ github.event.inputs.output_filename }}.apk
 
       - name: Publish to GitHub Releases
