@@ -24,26 +24,60 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
       - name: Install Turbowarp Packager
-        run: npm install -g @turbowarp/packager
+        run: npm install @turbowarp/packager cross-fetch
 
-      - name: Build HTML
+      - name: Build HTML and Windows ZIP
         run: |
-          npx turbowarp-packager \
-            --input "${{ github.workspace }}/${{ github.event.inputs.sb_filename }}" \
-            --dest "${{ github.event.inputs.output_filename }}.html"
+          cat << 'EOF' > build.js
+          const fs = require('fs');
+          const Packager = require('@turbowarp/packager');
           
-      - name: Build Windows EXE
-        run: |
-          npx turbowarp-packager \
-            --input "${{ github.workspace }}/${{ github.event.inputs.sb_filename }}" \
-            --target electron-win32 \
-            --dest "${{ github.event.inputs.output_filename }}.exe"
+          (async () => {
+              try {
+                  const sb_filename = '${{ github.event.inputs.sb_filename }}' || 'project.sb3';
+                  const output_filename = '${{ github.event.inputs.output_filename }}' || 'my_game';
+                  
+                  console.log(`Loading project: ${sb_filename}`);
+                  const projectData = fs.readFileSync(sb_filename);
+                  
+                  // Progress callback for large assets fetch
+                  const progressCallback = (type, a, b) => {
+                      if (type === 'large-asset-fetch') console.log(`Fetching asset: ${a}/${b}`);
+                  };
+                  const loadedProject = await Packager.loadProject(projectData, progressCallback);
+                  
+                  console.log("Building HTML...");
+                  const packagerHtml = new Packager.Packager();
+                  packagerHtml.project = loadedProject;
+                  packagerHtml.options.env = 'html';
+                  const resultHtml = await packagerHtml.package();
+                  fs.writeFileSync(`${output_filename}.html`, resultHtml.data);
+                  console.log(`Saved ${output_filename}.html`);
+
+                  console.log("Building Windows (ZIP)...");
+                  const packagerExe = new Packager.Packager();
+                  packagerExe.project = loadedProject;
+                  packagerExe.options.env = 'electron-win32';
+                  packagerExe.addEventListener('large-asset-fetch', ({detail}) => {
+                      console.log('Downloading Windows Packager large assets...', detail);
+                  });
+                  const resultExe = await packagerExe.package();
+                  fs.writeFileSync(`${output_filename}-windows.zip`, resultExe.data);
+                  console.log(`Saved ${output_filename}-windows.zip`);
+                  
+              } catch (e) {
+                  console.error("Packager error:", e);
+                  process.exit(1);
+              }
+          })();
+          EOF
+          node build.js
 
       - name: Set up Java
         uses: actions/setup-java@v3
@@ -78,7 +112,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            ${{ github.event.inputs.output_filename }}.exe
+            ${{ github.event.inputs.output_filename }}-windows.zip
             ${{ github.event.inputs.output_filename }}.apk
           tag_name: "build-${{ github.run_number }}"
           name: "Build #${{ github.run_number }}"
