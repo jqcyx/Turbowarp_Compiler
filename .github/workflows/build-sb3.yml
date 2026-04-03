@@ -107,8 +107,10 @@ jobs:
           cd android
           # 升级 Gradle Wrapper 到 8.7，以修复旧版 Gradle 的 ASM 库无法解析 Java 21 字节码 (major version 65) 的 bug
           sed -i 's/gradle-.*-all\.zip/gradle-8.7-all.zip/g' gradle/wrapper/gradle-wrapper.properties
-          sed -i 's/gradle-.*-bin\.zip/gradle-8.7-bin.zip/g' gradle/wrapper/gradle-wrapper.properties
-          
+          ./gradlew assembleDebug --no-daemon --stacktrace
+          cp app/build/outputs/apk/debug/app-debug.apk ../../${{ github.event.inputs.output_filename }}.apk
+
+      - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v1
         with:
           files: |
